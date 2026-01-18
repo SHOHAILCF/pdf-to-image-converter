@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title> Pdf to Image Converter </title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div id="pdfToImageApp">
+        <h2> Pdf to Image Converter </h2>
+        <p class="subtitle">
+            Upload your PDF and instantly convert pages to high-quality JPG or PNG images - right in your browser.
+        </p>
+        <div class="controls">
+            <input id="fileInput" type="file" accept="application/pdf">
+            <button id="convertBtn" disabled> Convert Pdf </button>
+            <button id="downloadAllBtn" disabled> Download All (Zip) </button>
+            <label class="scale-label">
+                Scale:
+                <select id="scaleSelect">
+                    <option value="1"> 1x (Original) </option>
+                    <option value="1.5"> 1.5x </option>
+                    <option value="2"> 2x </option>
+                    <option value="0.8"> 0.8x </option>
+                </select>
+            </label>
+        </div>
+        <div id="status"> No file chosen. </div>
+        <div id="previews"> </div>
+    </div>
+    
+    <script src="https://unpkg.com/pdfjs-dist@3.8.162/build/pdf.min.js"> </script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"> </script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"> </script>
+    
+    <script>
+        pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://unpkg.com/pdfjs-dist@3.8.162/build/pdf.worker.min.js';
+        const fileInput = document.getElementById('fileInput');
+        const convertBtn = document.getElementById('convertBtn');
+        const downloadAllBtn = document.getElementById('downloadAllBtn');
+        const scaleSelect = document.getElementById('scaleSelect');
+        const status = document.getElementById('status');
+        const previews = document.getElementById('previews');
+        let imagesBlobs = [];
+        
+        fileInput.addEventListener('change', () => {
+            imagesBlobs = [];
+            previews.innerHTML = '';
+            if (fileInput.files && fileInput.files[0]) {
+                convertBtn.disabled = false;
+                status.textContent = `Selected: ${fileInput.files[0].name}`;
+            }
+            else {
+                convertBtn.disabled = true;
+                status.textContent = 'No file chosen.';
+            }
+            downloadAllBtn.disabled = true;
+        });
+        
+        convertBtn.addEventListener('click', async () => {
+            const file = fileInput.files[0];
+            if (!file) return alert('Please choose a PDF file.');
+            convertBtn.disabled = true;
+            downloadAllBtn.disabled = true;
+            previews.innerHTML = '';
+            imagesBlobs = [];
+            status.textContent = 'Reading PDF...';
+            try {
+                const arrayBuffer = await file.arrayBuffer();
+                const pdf = await pdfjsLib.getDocument({data: arrayBuffer}).promise;
+                status.textContent = `Loaded PDF (${pdf.numPages} page(s)). Rendering...`;
+                
+                for (let p = 1; p <= pdf.numPages; p++) {
+                    status.textContent = `Rendering page ${p} of ${pdf.numPages}...`;
+                    const page = await pdf.getPage(p);
+                    const viewport = page.getViewport({scale: parseFloat(scaleSelect.value) || 1});
+                    const canvas = document.createElement('canvas');
+                    const ctx = canvas.getContext('2d');
+                    canvas.width = viewport.width;
+                    canvas.height = viewport.height;
+                    await page.render({canvasContext: ctx, viewport}).promise;
+                    
+                    const pngData = canvas.toDataURL('image/png');
+                    const jpgData = canvas.toDataURL('image/jpeg', 0.92); // quality 92%
+
+                    const pngBlob = dataURItoBlob(pngData);
+                    const jpgBlob = dataURItoBlob(jpgData);
+                    const baseName = `${file.name.replace(/\.pdf$/i,'')}_page${String(p).padStart(3,'0')}`;
+                    imagesBlobs.push({name: baseName+'.png', blob: pngBlob});
+                    imagesBlobs.push({name: baseName+'.jpg', blob: jpgBlob});
+                    
+                    // Card UI
+                    const card = document.createElement('div');
+                    card.className = 'page-card';
+                    const img = document.createElement('img');
+                    img.src = pngData;
+                    const nameDiv = document.createElement('div');
+                    nameDiv.className = 'page-name';
+                    nameDiv.textContent = baseName;
+                    
+                    const btns = document.createElement('div');
+                    btns.className = 'buttons';
+                    const btnPng = document.createElement('button');
+                    btnPng.className = 'btn-png';
+                    btnPng.textContent = 'Download PNG';
+                    btnPng.onclick = () => saveAs(pngBlob, baseName+'.png');
+                    const btnJpg = document.createElement('button');
+                    btnJpg.className = 'btn-jpg';
+                    btnJpg.textContent = 'Download JPG';
+                    btnJpg.onclick = () => saveAs(jpgBlob, baseName+'.jpg');
+                    const btnView = document.createElement('button');
+                    btnView.className = 'btn-view';
+                    btnView.textContent = 'Open Image';
+                    btnView.onclick = () => { const w = window.open(); w.document.write('<img src="'+pngData+'" style="max-width:100%;">'); };
+                    
+                    btns.appendChild(btnPng);
+                    btns.appendChild(btnJpg);
+                    btns.appendChild(btnView);
+                    
+                    card.appendChild(img);
+                    card.appendChild(nameDiv);
+                    card.appendChild(btns);
+                    previews.appendChild(card);
+                }
+                
+                status.textContent = `✅ Done — ${pdf.numPages} pages converted.`;
+                downloadAllBtn.disabled = imagesBlobs.length === 0;
+            }
+            catch (err) {
+                console.error(err);
+                status.textContent = 'Error: ' + err.message;
+            }
+            finally {
+                convertBtn.disabled = false;
+            }
+        });
+        
+        downloadAllBtn.addEventListener('click', async () => {
+            if (!imagesBlobs.length) return;
+            status.textContent = 'Creating ZIP...';
+            const zip = new JSZip();
+            imagesBlobs.forEach(item => zip.file(item.name, item.blob));
+            const blob = await zip.generateAsync({type:'blob'}, meta => {
+                status.textContent = `Zipping: ${Math.round(meta.percent)}%`;
+            });
+            saveAs(blob, 'pdf_images.zip');
+            status.textContent = 'ZIP ready — download started.';
+        });
+        
+        function dataURItoBlob(dataURI) {
+            const byteString = atob(dataURI.split(',')[1]);
+            const mimeString = dataURI.split(',')[0].split(':')[1].split(';')[0];
+            const ab = new ArrayBuffer(byteString.length);
+            const ia = new Uint8Array(ab);
+            for (let i = 0; i < byteString.length; i++) ia[i] = byteString.charCodeAt(i);
+            return new Blob([ab], {type: mimeString});
+        }
+    </script>
+</body>
+</html>
